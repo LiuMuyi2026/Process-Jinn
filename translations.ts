@@ -28,7 +28,10 @@ export const t = {
     btnSelect: "Select Strategy",
     headerSelected: "Selected Strategy",
     headerRoadmap: "Execution Roadmap",
-    btnBack: "Back to Strategies",
+    btnBack: "Back",
+    btnCopy: "Copy Plan",
+    btnSave: "Save as File",
+    copied: "Copied!",
     headerResources: "Resource Details",
     resourceTip: "Resources highlighted in",
     resourceTip2: "Blue Pills",
@@ -40,7 +43,18 @@ export const t = {
     expand: "How to do this",
     collapse: "Hide details",
     simultaneous: "Simultaneous Actions",
-    errorGeneric: "Failed to generate content. Please check your connection or try again."
+    errorGeneric: "Failed to generate content. Please check your connection or try again.",
+    
+    // New Actions
+    edit: "Edit Step",
+    regenerate: "Regenerate Step",
+    save: "Save",
+    cancel: "Cancel",
+    postEditTitle: "Step updated. What next?",
+    actionJustSave: "Just Save",
+    actionSubsteps: "Plan Sub-steps",
+    actionFuture: "Update Future Steps",
+    regenerating: "Regenerating..."
   },
   zh: {
     appTitle: "流程精灵",
@@ -69,7 +83,10 @@ export const t = {
     btnSelect: "选择策略",
     headerSelected: "已选策略",
     headerRoadmap: "执行路线图",
-    btnBack: "返回策略列表",
+    btnBack: "返回",
+    btnCopy: "复制计划",
+    btnSave: "保存文件",
+    copied: "已复制！",
     headerResources: "资源详情",
     resourceTip: "高亮显示的",
     resourceTip2: "蓝色胶囊",
@@ -81,7 +98,18 @@ export const t = {
     expand: "如何执行",
     collapse: "隐藏详情",
     simultaneous: "同步行动",
-    errorGeneric: "生成内容失败，请检查您的网络连接或重试。"
+    errorGeneric: "生成内容失败，请检查您的网络连接或重试。",
+
+    // New Actions
+    edit: "编辑步骤",
+    regenerate: "重新生成步骤",
+    save: "保存",
+    cancel: "取消",
+    postEditTitle: "步骤已更新。接下来？",
+    actionJustSave: "仅保存",
+    actionSubsteps: "规划子步骤",
+    actionFuture: "更新后续步骤",
+    regenerating: "重新生成中..."
   }
 };
 

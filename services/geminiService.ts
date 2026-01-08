@@ -239,3 +239,129 @@ export const generateResourcePlan = async (resourceName: string, language: Langu
     resources: st.resources || [],
   }));
 };
+
+export const regenerateStepText = async (
+  currentInstruction: string,
+  context: string,
+  language: Language
+): Promise<{ instruction: string, resources: string[] }> => {
+  const langName = language === 'zh' ? 'Simplified Chinese' : 'English';
+
+  const prompt = `
+    Context: "${context}"
+    Current Instruction: "${currentInstruction}"
+
+    Task: Rewrite the current instruction to be more clear, actionable, or alternative. Keep the same intent but improve the phrasing or method.
+    
+    Requirements:
+    1. Output in ${langName}.
+    2. Bracket [Resources].
+  `;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          instruction: { type: Type.STRING },
+          resources: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ["instruction", "resources"],
+      },
+    },
+  });
+
+  return JSON.parse(response.text || "{}");
+};
+
+export const regenerateFutureSteps = async (
+  goal: string,
+  contextBefore: string[],
+  currentStep: string,
+  count: number,
+  language: Language
+): Promise<PlanItem[]> => {
+  const langName = language === 'zh' ? 'Simplified Chinese' : 'English';
+
+  const prompt = `
+    Goal: "${goal}"
+    History of steps already planned/completed: ${JSON.stringify(contextBefore)}
+    The step that just changed/edited: "${currentStep}"
+
+    Task: Generate the remaining ${count} steps needed to complete the goal, starting AFTER "The step that just changed". The flow must adapt to the changed step.
+
+    Requirements:
+    1. Output in ${langName}.
+    2. Generate exactly ${count} items.
+    3. Items can be single or parallel.
+    4. Bracket [Resources].
+  `;
+
+  const response = await ai.models.generateContent({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      systemInstruction: `You are a helpful expert planner. You MUST output your response in ${langName}, even if the input text is in a different language.`,
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            type: { type: Type.STRING, enum: ["single", "parallel"] },
+            instruction: { type: Type.STRING },
+            resources: { type: Type.ARRAY, items: { type: Type.STRING } },
+            parallelSteps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                   instruction: { type: Type.STRING },
+                   resources: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ["instruction", "resources"]
+              }
+            }
+          },
+        },
+      },
+    },
+  });
+
+  const rawPlan = JSON.parse(response.text || "[]");
+
+  return rawPlan.map((item: any, itemIdx: number) => {
+    const timestamp = Date.now();
+    const uniqueId = Math.random().toString(36).substr(2, 5);
+    
+    if (item.type === 'parallel' && item.parallelSteps) {
+      return {
+        type: 'parallel',
+        group: {
+          id: `group-regen-${timestamp}-${uniqueId}-${itemIdx}`,
+          steps: item.parallelSteps.map((ps: any, pIdx: number) => ({
+            id: `step-regen-${timestamp}-${uniqueId}-${itemIdx}-${pIdx}`,
+            instruction: ps.instruction,
+            resources: ps.resources || [],
+            subSteps: [],
+            isExpanded: false,
+          }))
+        }
+      } as PlanItem;
+    }
+
+    return {
+      type: 'single',
+      step: {
+        id: `step-regen-${timestamp}-${uniqueId}-${itemIdx}`,
+        instruction: item.instruction || "Do this step",
+        resources: item.resources || [],
+        subSteps: [],
+        isExpanded: false,
+      }
+    } as PlanItem;
+  });
+};

@@ -15,6 +15,7 @@ export interface Step {
   resources: string[]; // List of resource names found in this step
   subSteps?: Step[];
   isExpanded?: boolean;
+  isCompleted?: boolean;
   loading?: boolean;
 }
 

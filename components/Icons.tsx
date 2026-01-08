@@ -10,7 +10,16 @@ import {
   Loader2,
   Plus,
   Minus,
-  Briefcase
+  Briefcase,
+  X,
+  Copy,
+  Download,
+  FileText,
+  Check,
+  Edit3,
+  RefreshCw,
+  Save,
+  Circle
 } from 'lucide-react';
 
 export { 
@@ -25,5 +34,14 @@ export {
   Loader2,
   Plus,
   Minus,
-  Briefcase
+  Briefcase,
+  X,
+  Copy,
+  Download,
+  FileText,
+  Check,
+  Edit3,
+  RefreshCw,
+  Save,
+  Circle
 };

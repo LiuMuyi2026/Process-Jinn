@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { generateStrategies, expandStep, generateResourcePlan, generateStrategyPlan } from './services/geminiService';
+import { generateStrategies, expandStep, generateResourcePlan, generateStrategyPlan, regenerateStepText, regenerateFutureSteps } from './services/geminiService';
 import { GoalState, Step, Resource, PlanItem, Strategy, Language } from './types';
-import { Wand2, Layers, Loader2, ArrowRight, ArrowLeft } from './components/Icons';
+import { Wand2, Layers, Loader2, ArrowRight, ArrowLeft, Copy, Download, Check } from './components/Icons';
 import { StepList } from './components/StepList';
 import { ResourcePanel } from './components/ResourcePanel';
 import { getTranslation } from './translations';
@@ -20,6 +20,8 @@ const App: React.FC = () => {
     error: null,
     language: 'en'
   });
+
+  const [copied, setCopied] = useState(false);
 
   const t = getTranslation(state.language);
 
@@ -101,31 +103,8 @@ const App: React.FC = () => {
        try {
          const plan = await generateStrategyPlan(strategy, state.description, state.environment, state.language);
          
-         // Extract initial resources from the newly generated plan
-         const newResources: Resource[] = [];
-         const seenResources = new Set<string>();
-
-         const addResource = (resName: string) => {
-            const cleanName = resName.replace(/[\[\]]/g, '').trim(); 
-            if (cleanName && !seenResources.has(cleanName.toLowerCase())) {
-              seenResources.add(cleanName.toLowerCase());
-              newResources.push({
-                id: `res-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                name: cleanName,
-                isExpanded: false,
-                language: state.language
-              });
-            }
-          };
-
-          plan.forEach(item => {
-            if (item.type === 'single') {
-              item.step.resources.forEach(addResource);
-            } else {
-              item.group.steps.forEach(s => s.resources.forEach(addResource));
-            }
-          });
-
+         const newResources = extractResourcesFromPlan(plan);
+         
          setState(prev => ({
            ...prev,
            loading: false,
@@ -155,6 +134,33 @@ const App: React.FC = () => {
     }
   };
 
+  const extractResourcesFromPlan = (plan: PlanItem[], existingResources: Resource[] = []): Resource[] => {
+      const newResources: Resource[] = [...existingResources];
+      const seenResources = new Set<string>(existingResources.map(r => r.name.toLowerCase()));
+
+      const addResource = (resName: string) => {
+        const cleanName = resName.replace(/[\[\]]/g, '').trim(); 
+        if (cleanName && !seenResources.has(cleanName.toLowerCase())) {
+          seenResources.add(cleanName.toLowerCase());
+          newResources.push({
+            id: `res-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: cleanName,
+            isExpanded: false,
+            language: state.language
+          });
+        }
+      };
+
+      plan.forEach(item => {
+        if (item.type === 'single') {
+          item.step.resources.forEach(addResource);
+        } else {
+          item.group.steps.forEach(s => s.resources.forEach(addResource));
+        }
+      });
+      return newResources;
+  };
+
   const handleReset = () => {
     setState(prev => ({
       ...prev,
@@ -175,12 +181,136 @@ const App: React.FC = () => {
     }));
   };
 
+  // --- New Handlers for Edit/Check/Regenerate ---
+
+  const handleToggleComplete = (step: Step) => {
+     updateStepInState(step.id, { isCompleted: !step.isCompleted });
+  };
+
+  const handleRegenerateStep = async (step: Step) => {
+     updateStepInState(step.id, { loading: true });
+     try {
+       const context = `${state.description} ${state.environment}`;
+       const result = await regenerateStepText(step.instruction, context, state.language);
+       
+       updateStepInState(step.id, { 
+         loading: false, 
+         instruction: result.instruction,
+         resources: result.resources,
+         subSteps: undefined, // Clear old substeps
+         isExpanded: false
+       });
+       
+       // Add new resources if found
+       if (result.resources.length > 0) {
+          setState(prev => ({
+             ...prev,
+             resources: extractResourcesFromPlan([{type: 'single', step: { ...step, resources: result.resources }}], prev.resources)
+          }));
+       }
+     } catch(e) {
+       console.error(e);
+       updateStepInState(step.id, { loading: false });
+     }
+  };
+
+  const handleEditStep = async (step: Step, newText: string, mode: 'save' | 'substeps' | 'future') => {
+      // 1. Update the text immediately
+      // Extract pseudo-resources from bracketed text
+      const regex = /\[(.*?)\]/g;
+      const foundResources = [];
+      let match;
+      while ((match = regex.exec(newText)) !== null) {
+         foundResources.push(match[1]);
+      }
+
+      updateStepInState(step.id, { 
+          instruction: newText, 
+          resources: foundResources
+      });
+
+      // Update global resources list
+      if (foundResources.length > 0) {
+        setState(prev => ({
+            ...prev,
+            resources: extractResourcesFromPlan([{type: 'single', step: { ...step, resources: foundResources }}], prev.resources)
+         }));
+      }
+
+      // 2. Handle specific modes
+      if (mode === 'substeps') {
+          // Trigger expand
+          const activeStrategy = state.strategies.find(s => s.id === state.selectedStrategyId);
+          if (activeStrategy) {
+              performExpandStep({ ...step, instruction: newText }, activeStrategy.title);
+          }
+      } else if (mode === 'future') {
+          handleRegenerateFuture(step.id, newText);
+      }
+  };
+
+  const handleRegenerateFuture = async (stepId: string, currentText: string) => {
+      const activeStrategy = state.strategies.find(s => s.id === state.selectedStrategyId);
+      if (!activeStrategy || !activeStrategy.plan) return;
+
+      // Find index of the edited step
+      const planIndex = activeStrategy.plan.findIndex(item => 
+          item.type === 'single' ? item.step.id === stepId : item.group.steps.some(s => s.id === stepId)
+      );
+
+      if (planIndex === -1 || planIndex === activeStrategy.plan.length - 1) return; // Not found or last step
+
+      const itemsToRegenerateCount = activeStrategy.plan.length - 1 - planIndex;
+      const contextSteps = activeStrategy.plan.slice(0, planIndex + 1).map(item => {
+         if (item.type === 'single') return item.step.instruction;
+         return item.group.steps.map(s => s.instruction).join(" AND ");
+      });
+      
+      // Show loading on subsequent steps
+      const updatedPlanLoading = activeStrategy.plan.map((item, idx) => {
+          if (idx > planIndex) {
+             if (item.type === 'single') return { ...item, step: { ...item.step, loading: true }};
+             // Simplified: parallel groups loading
+             return item;
+          }
+          return item;
+      });
+      
+      setState(prev => ({
+        ...prev,
+        strategies: prev.strategies.map(s => s.id === state.selectedStrategyId ? { ...s, plan: updatedPlanLoading } : s)
+      }));
+
+      try {
+         const newFutureItems = await regenerateFutureSteps(state.description, contextSteps, currentText, itemsToRegenerateCount, state.language);
+         
+         const finalPlan = [...activeStrategy.plan.slice(0, planIndex + 1), ...newFutureItems];
+         
+         setState(prev => ({
+            ...prev,
+            strategies: prev.strategies.map(s => s.id === state.selectedStrategyId ? { ...s, plan: finalPlan } : s),
+            resources: extractResourcesFromPlan(newFutureItems, prev.resources)
+         }));
+
+      } catch(e) {
+          console.error(e);
+          // Revert loading state
+          setState(prev => ({
+             ...prev,
+             strategies: prev.strategies.map(s => s.id === state.selectedStrategyId ? { ...s, plan: activeStrategy.plan } : s)
+          }));
+      }
+  };
+
   const handleExpandStep = async (targetStep: Step, contextStrategyTitle: string) => {
     if (targetStep.subSteps && targetStep.subSteps.length > 0) {
       updateStepInState(targetStep.id, { isExpanded: !targetStep.isExpanded });
       return;
     }
+    performExpandStep(targetStep, contextStrategyTitle);
+  };
 
+  const performExpandStep = async (targetStep: Step, contextStrategyTitle: string) => {
     updateStepInState(targetStep.id, { loading: true });
 
     try {
@@ -188,27 +318,27 @@ const App: React.FC = () => {
       const context = `${state.description}${envContext} (Strategy: ${contextStrategyTitle})`;
       const subSteps = await expandStep(targetStep.instruction, context, state.language);
       
-      const newResources: Resource[] = [];
-      const currentResourceNames = new Set(state.resources.map(r => r.name.toLowerCase()));
-
+      // Update resources
+      let updatedResources = [...state.resources];
+      const seen = new Set(updatedResources.map(r => r.name.toLowerCase()));
       subSteps.forEach(s => {
-        s.resources.forEach(r => {
-           const cleanName = r.replace(/[\[\]]/g, '').trim();
-           if (!currentResourceNames.has(cleanName.toLowerCase())) {
-             currentResourceNames.add(cleanName.toLowerCase());
-             newResources.push({
-               id: `res-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-               name: cleanName,
-               isExpanded: false,
-               language: state.language
-             });
-           }
-        });
+          s.resources.forEach(r => {
+            const clean = r.replace(/[\[\]]/g, '').trim();
+            if (clean && !seen.has(clean.toLowerCase())) {
+                seen.add(clean.toLowerCase());
+                updatedResources.push({
+                    id: `res-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                    name: clean,
+                    isExpanded: false,
+                    language: state.language
+                });
+            }
+          });
       });
 
       setState(prev => ({
         ...prev,
-        resources: [...prev.resources, ...newResources]
+        resources: updatedResources
       }));
 
       updateStepInState(targetStep.id, {
@@ -310,6 +440,82 @@ const App: React.FC = () => {
       language: prev.language === 'en' ? 'zh' : 'en',
       error: null
     }));
+  };
+
+  const generatePlainText = () => {
+    if (!activeStrategy) return '';
+    
+    let text = `${t.appTitle} Plan\n\n`;
+    text += `${t.labelGoal}: ${state.description}\n`;
+    if (state.quantification) text += `${t.labelSpecifics}: ${state.quantification}\n`;
+    if (state.environment) text += `${t.labelEnvironment}: ${state.environment}\n`;
+    text += `\n--------------------------------\n\n`;
+    
+    text += `${t.headerSelected}: ${activeStrategy.title}\n`;
+    text += `${activeStrategy.description}\n\n`;
+    
+    text += `${t.headerRoadmap}:\n`;
+
+    activeStrategy.plan?.forEach((item, idx) => {
+       if (item.type === 'single') {
+          const check = item.step.isCompleted ? '[x]' : '[ ]';
+          text += `${idx + 1}. ${check} ${item.step.instruction}\n`;
+           if (item.step.subSteps) {
+              item.step.subSteps.forEach((sub) => {
+                 const subCheck = sub.isCompleted ? '[x]' : '[ ]';
+                 text += `   - ${subCheck} ${sub.instruction}\n`;
+              });
+           }
+       } else {
+          text += `${idx + 1}. ${t.simultaneous}:\n`;
+          item.group.steps.forEach((step) => {
+             const check = step.isCompleted ? '[x]' : '[ ]';
+             text += `   - ${check} ${step.instruction}\n`;
+              if (step.subSteps) {
+                 step.subSteps.forEach((sub) => {
+                    const subCheck = sub.isCompleted ? '[x]' : '[ ]';
+                    text += `     * ${subCheck} ${sub.instruction}\n`;
+                 });
+              }
+          });
+       }
+    });
+
+    if (state.resources.length > 0) {
+        text += `\n--------------------------------\n\n`;
+        text += `${t.headerResources}:\n`;
+        state.resources.forEach(res => {
+           text += `\n[${res.name}]\n`;
+           if (res.acquisitionSteps) {
+               res.acquisitionSteps.forEach((step, idx) => {
+                   text += `${idx + 1}. ${step.instruction}\n`;
+               });
+           } else {
+               text += `(Plan not generated yet)\n`;
+           }
+        });
+    }
+
+    return text;
+  };
+
+  const handleCopyPlan = () => {
+    const text = generatePlainText();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleDownloadPlan = () => {
+    const text = generatePlainText();
+    const element = document.createElement("a");
+    const file = new Blob([text], {type: 'text/markdown'});
+    element.href = URL.createObjectURL(file);
+    element.download = "process-jinn-plan.md";
+    document.body.appendChild(element); // Required for this to work in FireFox
+    element.click();
+    document.body.removeChild(element);
   };
 
   const selectedResource = state.resources.find(r => r.id === state.selectedResourceId) || null;
@@ -502,20 +708,39 @@ const App: React.FC = () => {
   const renderProcessScreen = () => {
     if (!activeStrategy || !activeStrategy.plan) return null;
 
+    const isPanelOpen = !!selectedResource;
+
     return (
       <div className="animate-in fade-in duration-500 pb-20">
-        <div className="max-w-7xl mx-auto mb-8">
+        <div className="max-w-7xl mx-auto mb-8 flex items-center justify-between">
            <button 
              onClick={handleBackToSelection}
              className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 transition-colors font-medium text-sm px-4 py-2 rounded-full hover:bg-white border border-transparent hover:border-slate-200"
            >
              <ArrowLeft className="w-4 h-4" /> {t.btnBack}
            </button>
+
+           <div className="flex gap-2">
+              <button
+                onClick={handleCopyPlan}
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-50 hover:border-indigo-200 hover:text-indigo-600 transition-all shadow-sm"
+              >
+                {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                {copied ? t.copied : t.btnCopy}
+              </button>
+              <button
+                onClick={handleDownloadPlan}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 border border-slate-800 text-white rounded-xl text-sm font-semibold hover:bg-slate-700 transition-all shadow-sm hover:shadow"
+              >
+                <Download className="w-4 h-4" />
+                {t.btnSave}
+              </button>
+           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Left Column: Process (8 cols) */}
-          <div className="lg:col-span-8 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 relative transition-all duration-300">
+          {/* Left Column: Process */}
+          <div className={`${isPanelOpen ? 'lg:col-span-8' : 'lg:col-span-12'} space-y-6 transition-all duration-500`}>
             <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
               <div className="p-8 border-b border-slate-100 bg-slate-50/30">
                  <div className="flex items-center gap-3 mb-3">
@@ -523,6 +748,14 @@ const App: React.FC = () => {
                  </div>
                  <h2 className="text-3xl font-bold text-slate-900 mb-3">{activeStrategy.title}</h2>
                  <p className="text-lg text-slate-600 leading-relaxed">{activeStrategy.description}</p>
+                 
+                 {/* Tip is now shown here when panel is closed to guide user */}
+                 {!isPanelOpen && (
+                   <div className="mt-4 flex items-center gap-2 text-sm text-slate-500 bg-blue-50/50 p-3 rounded-lg border border-blue-100/50 max-w-fit">
+                      <Layers className="w-4 h-4 text-blue-500" />
+                      <span>{t.resourceTip} <span className="font-semibold text-indigo-600">Blue Pills</span> {t.resourceTip3}</span>
+                   </div>
+                 )}
               </div>
               <div className="p-8">
                 <div className="flex items-center gap-2 mb-8 text-slate-400 font-semibold uppercase text-xs tracking-wider">
@@ -532,41 +765,46 @@ const App: React.FC = () => {
                   items={activeStrategy.plan} 
                   onExpandStep={(step) => handleExpandStep(step, activeStrategy.title)} 
                   onResourceClick={handleResourceClick}
+                  onToggleComplete={handleToggleComplete}
+                  onEditStep={handleEditStep}
+                  onRegenerateStep={handleRegenerateStep}
                   labels={{
                     expand: t.expand,
                     collapse: t.collapse,
-                    simultaneous: t.simultaneous
+                    simultaneous: t.simultaneous,
+                    edit: t.edit,
+                    regenerate: t.regenerate,
+                    save: t.save,
+                    cancel: t.cancel,
+                    postEditTitle: t.postEditTitle,
+                    actionJustSave: t.actionJustSave,
+                    actionSubsteps: t.actionSubsteps,
+                    actionFuture: t.actionFuture
                   }}
                 />
               </div>
             </div>
           </div>
 
-          {/* Right Column: Resource Panel (4 cols) */}
-          <div className="lg:col-span-4">
-             <div className="sticky top-24">
-               <div className="flex items-center gap-2 text-slate-400 font-medium text-sm uppercase tracking-wider mb-4 px-1">
-                  {t.headerResources}
-               </div>
-               <ResourcePanel 
-                 resource={selectedResource} 
-                 onResourceClick={handleResourceClick}
-                 labels={{
-                   noResourceTitle: t.noResourceTitle,
-                   noResourceDesc: t.noResourceDesc,
-                   acquisitionPlan: t.acquisitionPlan,
-                   generating: t.generating
-                 }}
-               />
-               
-               {/* Context Helper */}
-               {!selectedResource && (
-                 <div className="mt-4 p-4 rounded-xl bg-blue-50 border border-blue-100 text-blue-800 text-sm leading-relaxed">
-                   <strong>Tip:</strong> {t.resourceTip} <span className="inline-flex items-center gap-1 mx-1 px-1.5 py-0.5 rounded bg-white border border-blue-200 text-blue-600 text-xs font-medium"><Layers className="w-3 h-3"/> {t.resourceTip2}</span> {t.resourceTip3}
+          {/* Right Column: Resource Panel (Conditionally Rendered) */}
+          {isPanelOpen && (
+            <div className="lg:col-span-4">
+               <div className="sticky top-24">
+                 <div className="flex items-center gap-2 text-slate-400 font-medium text-sm uppercase tracking-wider mb-4 px-1">
+                    {t.headerResources}
                  </div>
-               )}
-             </div>
-          </div>
+                 <ResourcePanel 
+                   resource={selectedResource} 
+                   onResourceClick={handleResourceClick}
+                   onClose={() => setState(prev => ({ ...prev, selectedResourceId: null }))}
+                   labels={{
+                     acquisitionPlan: t.acquisitionPlan,
+                     generating: t.generating
+                   }}
+                 />
+               </div>
+            </div>
+          )}
         </div>
       </div>
     );

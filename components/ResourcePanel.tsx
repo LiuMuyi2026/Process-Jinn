@@ -1,50 +1,42 @@
 import React from 'react';
 import { Resource } from '../types';
-import { Box, Loader2 } from './Icons';
+import { Box, Loader2, X } from './Icons';
 import { StepRenderer } from './StepRenderer';
 
 interface ResourcePanelProps {
   resource: Resource | null;
   onResourceClick: (name: string) => void;
+  onClose: () => void;
   labels: {
-    noResourceTitle: string;
-    noResourceDesc: string;
     acquisitionPlan: string;
     generating: string;
-    noSteps?: string;
   }
 }
 
-export const ResourcePanel: React.FC<ResourcePanelProps> = ({ resource, onResourceClick, labels }) => {
-  if (!resource) {
-    return (
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 text-center h-fit sticky top-24">
-        <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300">
-           <Box className="w-6 h-6" />
-        </div>
-        <h3 className="text-sm font-semibold text-slate-500">{labels.noResourceTitle}</h3>
-        <p className="text-sm text-slate-400 mt-2">
-          {labels.noResourceDesc}
-        </p>
-      </div>
-    );
-  }
+export const ResourcePanel: React.FC<ResourcePanelProps> = ({ resource, onResourceClick, onClose, labels }) => {
+  if (!resource) return null;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden h-fit sticky top-24 animate-in slide-in-from-right-4 duration-500">
-      <div className="bg-indigo-50 p-6 border-b border-indigo-100">
-        <div className="flex items-start gap-3">
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-xl shadow-slate-200/50 overflow-hidden h-fit sticky top-24 animate-in slide-in-from-right-8 fade-in duration-300">
+      <div className="bg-indigo-50 p-5 border-b border-indigo-100 flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 overflow-hidden">
           <div className="w-10 h-10 rounded-xl bg-white text-indigo-600 shadow-sm flex items-center justify-center flex-shrink-0">
             <Box className="w-5 h-5" />
           </div>
-          <div>
-            <h2 className="font-bold text-lg text-slate-900 leading-tight">{resource.name}</h2>
+          <div className="min-w-0">
+            <h2 className="font-bold text-lg text-slate-900 leading-tight truncate">{resource.name}</h2>
             <p className="text-xs font-medium text-indigo-600 mt-1 uppercase tracking-wide">{labels.acquisitionPlan}</p>
           </div>
         </div>
+        <button 
+          onClick={onClose}
+          className="p-2 -mr-2 -mt-2 text-slate-400 hover:text-slate-600 hover:bg-indigo-100/50 rounded-full transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
-      <div className="p-6">
+      <div className="p-6 max-h-[calc(100vh-200px)] overflow-y-auto custom-scrollbar">
         {resource.loading ? (
           <div className="flex flex-col items-center justify-center py-8 text-slate-400 gap-3">
             <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
